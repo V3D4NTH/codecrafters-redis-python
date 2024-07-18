@@ -1,41 +1,21 @@
-[![progress-banner](https://backend.codecrafters.io/progress/redis/0b38b025-1b7f-4037-a150-2a1b8fdef3b6)](https://app.codecrafters.io/users/V3D4NTH?r=2qF)
+# isRed
 
-This is a starting point for Python solutions to the
-["Build Your Own Redis" Challenge](https://codecrafters.io/challenges/redis).
+isRed is a toy Redis clone capable of handling
+basic commands like `PING`, `SET` and `GET`, reading RDB files, and more. 
 
-In this challenge, you'll build a toy Redis clone that's capable of handling
-basic commands like `PING`, `SET` and `GET`. Along the way we'll learn about
-event loops, the Redis protocol and more.
+**Note**: [These](https://codecrafters.io) are the resources I used to build isRed.
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
 
-# Passing the first stage
 
-The entry point for your Redis implementation is in `app/main.py`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
-
-```sh
-git add .
-git commit -m "pass 1st stage" # any msg
-git push origin master
-```
-
-That's all!
-
-# Stage 2 & beyond
-
-Note: This section is for stages 2 and beyond.
+## Give it a try!
 
 1. Ensure you have `python (3.x)` installed locally
 1. Run `./your_program.sh` to run your Redis server, which is implemented in
    `app/main.py`.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
 
-# Troubleshooting
+## Troubleshooting
 
-## module `socket` has no attribute `create_server`
+#### module `socket` has no attribute `create_server`
 
 When running your server locally, you might see an error like this:
 
