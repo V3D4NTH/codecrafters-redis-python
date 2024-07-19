@@ -1,5 +1,5 @@
 # isRed
-
+----
 isRed is a toy Redis clone capable of handling
 basic commands like `PING`, `SET` and `GET`, reading RDB files, and more. 
 
