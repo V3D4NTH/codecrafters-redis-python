@@ -1,7 +1,7 @@
 # isRed
 ----
 isRed is a toy Redis clone capable of handling
-basic commands like `PING`, `SET` and `GET`, reading RDB files, and more. 
+basic commands like `PING`, `SET`, and `GET`, reading RDB files, and more. 
 
 **Note**: [These](https://codecrafters.io) are the resources I used to build isRed.
 
