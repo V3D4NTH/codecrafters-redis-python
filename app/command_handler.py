@@ -1,8 +1,16 @@
+import dataclasses
+import datetime
 from typing import Any
 
 from app.redis_serde import BulkString, ErrorString, NullString, SimpleString
 
-STORAGE = {}
+@dataclasses.dataclass
+class StorageValue:
+    expired_time: datetime.datetime | None
+    value: Any
+
+
+STORAGE: dict[str, StorageValue] = {}
 
 class RedisCommandHandler:
     def handle(self, message: Any) -> Any:
@@ -15,12 +23,25 @@ class RedisCommandHandler:
             case "echo":
                 return BulkString(message[1])
             case "set":
-                STORAGE[message[1]] = message[2]
+                if len(message) < 3:
+                    return ErrorString("Wrong number of arguments for 'set' command")
+                expired_time = None
+                if len(message) == 5 and message[3].lower() == "px":
+                    expired_time = datetime.datetime.now() + datetime.timedelta(
+                        milliseconds=int(message[4])
+                    )
+                STORAGE[message[1]] = StorageValue(expired_time, message[2])
                 return SimpleString("OK")
             case "get":
                 if message[1] in STORAGE:
-                    return STORAGE[message[1]]
-                else:
-                    return NullString()
+                    if (
+                        STORAGE[message[1]].expired_time is None
+                        or STORAGE[message[1]].expired_time > datetime.datetime.now()
+                    ):
+                        return STORAGE[message[1]].value
+                    else:
+                        del STORAGE[message[1]]
+
+                return NullString()
             case _:
                 return ErrorString("Unknown command")
