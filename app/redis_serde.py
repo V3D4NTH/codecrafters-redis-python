@@ -3,8 +3,11 @@ from typing import Any
 
 class SimpleString(str): ...
 
-
 class BulkString(str): ...
+
+class ErrorString(str): ...
+
+class NullString: ...
 
 
 class RedisSerializer:
@@ -17,6 +20,10 @@ class RedisSerializer:
         elif isinstance(message, SimpleString):
             return f"+{message}\r\n"
 
+        elif isinstance(message, ErrorString):
+            return f"-{message}\r\n"
+        elif isinstance(message, NullString):
+            return "$-1\r\n"
 
 class RedisDeserializer:
     def deserialize(self, message: bytes) -> Any:
