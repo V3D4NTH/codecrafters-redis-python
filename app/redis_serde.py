@@ -31,7 +31,7 @@ class RedisSerializer:
         
 class RedisDeserializer:
     def deserialize(self, message: bytes) -> Any:
-        value, _ = self._deserialize_impl(message.decode())
+        value, _ = self._deserialize_impl(message.decode(errors="ignore"))
         return value
 
     def _deserialize_impl(self, message: str, start_index: int = 0) -> Any:
