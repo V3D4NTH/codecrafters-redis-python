@@ -13,6 +13,9 @@ class StorageValue:
 STORAGE: dict[str, StorageValue] = {}
 
 class RedisCommandHandler:
+    def __init__(self, is_master: bool) -> None:
+        self._is_master = is_master
+
     def handle(self, message: Any) -> Any:
         if not isinstance(message, list) or len(message) == 0:
             return ValueError
@@ -46,6 +49,7 @@ class RedisCommandHandler:
             case "info":
                 if len(message) != 2 or message[1].lower() != "replication":
                     return ErrorString("Wrong arguments for 'info' command")
-                return BulkString("# Replication\nrole:master")
+                role = "master" if self._is_master else "slave"
+                return BulkString(f"# Replication\nrole:{role}")
             case _:
                 return ErrorString("Unknown command")
