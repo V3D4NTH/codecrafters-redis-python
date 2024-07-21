@@ -2,10 +2,9 @@ from __future__ import annotations
 import asyncio
 import contextlib  
 import base64
-import dataclasses
 import datetime
 from typing import TYPE_CHECKING, Any
-
+from app.storage import Storage, StorageValue
 from app.redis_serde import BulkString, ErrorString, Message, RDBString, SimpleString
 from app.schemas import PEERNAME, WaitTrigger
 from app.utils import random_id
@@ -15,34 +14,14 @@ if TYPE_CHECKING:
 default_rdb = base64.b64decode(
     "UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog=="
 )
-@dataclasses.dataclass
-class StorageValue:
-    expired_time: datetime.datetime | None
-    value: Any
-STORAGE: dict[str, StorageValue] = {}
-
-class Storage:
-    def __init__(self) -> None:
-        self._storage: dict[str, StorageValue] = {}
-
-    def __setitem__(self, key: str, value: StorageValue) -> None:
-        self._storage[key] = value
-
-    def __getitem__(self, key: str) -> Any:
-        if self._storage[key]:
-            if (
-                self._storage[key].expired_time is None
-                or self._storage[key].expired_time > datetime.datetime.now()
-            ):
-                return self._storage[key].value
-            else:
-                del self._storage[key]
-        return None
 
 class RedisCommandHandler:
-    def __init__(self, server: RedisServer) -> None:
+    def __init__(self, server: RedisServer, storage: Storage | None) -> None:
         self._server = server
-        self._storage = Storage() 
+        if storage is None:
+            self._storage = Storage()
+        else:
+            self._storage = storage
         self.master_id = random_id(40) if self._server.is_master else None
 
     async def handle(self, message: Message, peername: PEERNAME) -> list[Any]:
@@ -74,7 +53,7 @@ class RedisCommandHandler:
                     expired_time = datetime.datetime.now() + datetime.timedelta(
                         milliseconds=int(message.parsed[4])
                     )
-                STORAGE[self._storage[key]] = StorageValue(expired_time, message.parsed[2])
+                self._storage[key] = StorageValue(message.parsed[2], expired_time)
                 return [SimpleString("OK")]
             case "get":
                 return [self._storage[message.parsed[1]]]
@@ -142,6 +121,11 @@ class RedisCommandHandler:
                         return [ErrorString(f"Unknown config key {key}")]
                     return [[BulkString(key), BulkString(self._server.config[key])]]
                 return [ErrorString("Unknown config subcommand {subcommand}")]
+            case "keys":
+                subcommand = message.parsed[1].lower()
+                if subcommand == "*":
+                    return [[BulkString(key) for key in self._storage]]
+                return [ErrorString("Unknown keys subcommand {subcommand}")]
             case _:
                 return [ErrorString("Unknown command")]
 
