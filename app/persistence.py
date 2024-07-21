@@ -1,7 +1,8 @@
 import io
+import datetime
+from typing import Literal 
 from enum import Enum
 from pathlib import Path
-
 from app.storage import Storage, StorageValue
 
 
@@ -44,6 +45,10 @@ class PersistentStorage:
                 self._read_auxiliary(f)
             case 0xFB:
                 self._read_resize_db(f)
+            case 0xFC:
+                self._read_pair_with_expiry(f, "ms")
+            case 0xFD:
+                self._read_pair_with_expiry(f, "s")
             case 0xFE:
                 self._read_db_selector(f)
             case 0xFF:
@@ -63,16 +68,25 @@ class PersistentStorage:
         return table_size, expire_hash_table
 
     def _read_db_selector(self, f: io.BufferedReader):
-        db_number = int.from_bytes(f.read(1), "big")
+        db_number = int.from_bytes(f.read(1), "little")
         return db_number
 
-    def _read_pair(self, f: io.BufferedReader):
+    def _read_pair_with_expiry(self, f: io.BufferedReader, units: Literal["s", "ms"]):
+        expiry_time = int.from_bytes(f.read(8 if units == "ms" else 4), "little")
+        if units == "ms":
+            expiry_time /= 1000.0
+        f.read(1)
+        self._read_pair(f, datetime.datetime.fromtimestamp(expiry_time))
+
+    def _read_pair(self, f: io.BufferedReader, expired_time: datetime.datetime | None = None):
         key = self._read_value(f)
         value = self._read_value(f)
+        if expired_time and expired_time < datetime.datetime.now():
+            return
         self._storage[key] = StorageValue(value)
 
     def _read_checksum(self, f: io.BufferedReader):
-        checksum = int.from_bytes(f.read(8), "big")
+        checksum = int.from_bytes(f.read(8), "little")
         return checksum
 
     def _read_value(self, f: io.BufferedReader) -> str | int:
