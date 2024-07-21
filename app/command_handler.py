@@ -8,6 +8,7 @@ from app.storage import Storage, StorageValue, Stream
 from app.redis_serde import BulkString, ErrorString, Message, RDBString, SimpleString
 from app.schemas import PEERNAME, WaitTrigger
 from app.utils import random_id
+from app.exception import RedisError
 
 if TYPE_CHECKING:
     from app.server import RedisServer
@@ -62,7 +63,11 @@ class RedisCommandHandler:
                 stream_key, stream_id = message.parsed[1], message.parsed[2]
                 if self._storage[stream_key] is None:
                     self._storage[stream_key] = StorageValue(Stream())
-                # stream: Stream = self._storage[stream_key]
+                stream: Stream = self._storage[stream_key]
+                try:
+                    stream.xadd(stream_id)
+                except RedisError as e:
+                    return [ErrorString(e.message)]
                 return [BulkString(stream_id)]
             case "type":
                 value = self._storage[message.parsed[1]]
