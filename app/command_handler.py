@@ -98,7 +98,7 @@ class RedisCommandHandler:
                     RDBString(default_rdb),
                 ]
             case "wait":
-                return [0]
+                return [self._server.num_replicsa]
             case _:
                 return [ErrorString("Unknown command")]
 

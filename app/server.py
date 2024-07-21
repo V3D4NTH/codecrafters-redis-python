@@ -1,9 +1,7 @@
 import asyncio
 from typing import Any
-
 from app.command_handler import RedisCommandHandler
 from app.redis_serde import BulkString, RedisDeserializer, RedisSerializer
-from app.utils import random_id
 
 CHUNK_SIZE = 500
 
@@ -38,7 +36,6 @@ class RedisServer:
             writer,
             [BulkString("PSYNC"), BulkString("?"), BulkString("-1")],
         )
-        self.handshake_finished = True 
         self._master_messages_task = asyncio.create_task(self.wait_master_message(reader, writer))
 
     async def _send_request(
@@ -49,7 +46,7 @@ class RedisServer:
         await writer.drain()
         raw_response = await reader.read(CHUNK_SIZE)
         print(f"Master raw response: {raw_response}")
-        await self._receive_message(writer, raw_response, from_master=False)
+        await self._receive_message(writer, raw_response, from_master=True)
 
     async def handle_client(
         self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
@@ -92,6 +89,10 @@ class RedisServer:
     @property
     def is_master(self) -> bool:
         return self._master_host is None
+    
+    @property
+    def num_replicas(self) -> int:
+        return len(self._slave_connections)
 
     async def propagate(self, message: Any) -> None:
         for writer in self._slave_connections:
