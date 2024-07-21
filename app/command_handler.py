@@ -23,7 +23,22 @@ class RedisCommandHandler:
     def __init__(self, server: RedisServer) -> None:
         self._server= server
 
-    def handle(self, message: Any) ->list[Any]:
+    def handle(self, message: Any, from_master: bool = False) -> list[Any]:
+        response = self._handle_impl(message)
+        if not self._server.is_master and from_master and self._server.handshake_finished:
+            if isinstance(message, list) and len(message) > 0 and message[0].lower() == "replconf":
+                return response
+            return []
+        return response
+
+    def _handle_impl(self, message: Any) -> list[Any]:
+        if (
+            message == SimpleString("OK")
+            or message == SimpleString("PONG")
+            or isinstance(message, str)
+            and (message.startswith("REDIS") or message.startswith("FULLRESYNC"))
+        ):
+            return []
         if not isinstance(message, list) or len(message) == 0:
             return [ErrorString("Wrong message format")]
         command = message[0].lower()
@@ -61,6 +76,8 @@ class RedisCommandHandler:
                     f"# Replication\nrole:{role}\nmaster_replid:{self._server.master_id}\nmaster_repl_offset:{self._server.offset}"
                 )]
             case "replconf":
+                if len(message) == 3 and message[1].lower() == "getack":
+                    return [[BulkString("REPLCONF"), BulkString("ACK"), BulkString("0")]]
                 return [SimpleString("OK")]
             case "psync":
                 return [
