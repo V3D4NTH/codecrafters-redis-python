@@ -3,8 +3,10 @@ from typing import Any
 from pathlib import Path
 from app.command_handler import RedisCommandHandler
 from app.redis_serde import BulkString, Message, RedisSerializer
-from app.schemas import PEERNAME, Connection, WaitTrigger
+from app.schemas import PEERNAME, Connection, WaitTrigger, EntryId, StreamTrigger 
 from app.persistence import PersistentStorage
+from app.utils import random_id 
+
 CHUNK_SIZE = 500
 
 
@@ -20,6 +22,8 @@ class RedisServer:
         self._offset = 0
         self.config = config or {}
         self.handshake_finished = False
+        self.master_id = random_id(40) if self.is_master else None
+        self._stream_triggers: list[StreamTrigger] = []
 
     async def serve_forever(self) -> None:
         server = await asyncio.start_server(self.handle_client, "localhost", self._port)
@@ -39,6 +43,22 @@ class RedisServer:
 
         writer.close()
         await writer.wait_closed()
+
+    def register_stream_trigger(self, trigger: StreamTrigger) -> None:
+        self._stream_triggers.append(trigger)
+
+    def check_stream_triggers(self, key: str, entry_id: EntryId) -> None:
+        for trigger in self._stream_triggers:
+            if (
+                trigger.key == key
+                and entry_id.timestamp > trigger.entry_id.timestamp
+                or (
+                    entry_id.timestamp == trigger.entry_id.timestamp
+                    and entry_id.sequence_number > trigger.entry_id.sequence_number
+                )
+            ):
+                trigger.event.set()
+                self._stream_triggers.remove(trigger)
 
     async def _pre_handle_hook(self, connection: Connection, message: Message) -> None:
         return None
@@ -131,7 +151,7 @@ class MasterServer(RedisServer):
                 count += 1
         return count
 
-    def register_trigger(self, trigger: WaitTrigger) -> None:
+    def register_wait_trigger(self, trigger: WaitTrigger) -> None:
         self._wait_triggers.append(trigger)
 
     def _check_wait_triggers(self) -> None:

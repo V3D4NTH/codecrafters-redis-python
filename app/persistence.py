@@ -3,7 +3,8 @@ import datetime
 from typing import Literal 
 from enum import Enum
 from pathlib import Path
-from app.storage import Storage, StorageValue
+from app.storage import Storage
+from app.schemas import StorageValue
 
 
 class SpecialEncoding(Enum):
