@@ -6,7 +6,6 @@ from pathlib import Path
 from app.storage import Storage
 from app.schemas import StorageValue
 
-
 class SpecialEncoding(Enum):
     INT_8 = 0
     INT_16 = 1
@@ -22,8 +21,6 @@ class PersistentStorage:
         if not self._file.exists():
             return self._storage
         with self._file.open("rb") as f:
-            print(f"parsing file {f.read()}")
-            f.seek(0)
             self._read_magic_string(f)
             self._read_version(f)
             while True:
@@ -80,7 +77,7 @@ class PersistentStorage:
         self._read_pair(f, datetime.datetime.fromtimestamp(expiry_time))
 
     def _read_pair(self, f: io.BufferedReader, expired_time: datetime.datetime | None = None):
-        key = self._read_value(f)
+        key = str(self._read_value(f))
         value = self._read_value(f)
         if expired_time and expired_time < datetime.datetime.now():
             return

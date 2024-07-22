@@ -7,7 +7,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, AsyncGenerator 
 from app.storage import Storage, Stream
 from app.redis_serde import BulkString, ErrorString, Message, RDBString, SimpleString
-from app.schemas import PEERNAME, WaitTrigger, EntryId, StorageValue, StreamTrigger
+from app.schemas import Connection, WaitTrigger, EntryId, StorageValue, StreamTrigger
 from app.exception import RedisError
 from app.utils import to_pairs
 
@@ -20,12 +20,11 @@ default_rdb = base64.b64decode(
 class RedisCommandHandler:
     def __init__(self, server: RedisServer, storage: Storage | None) -> None:
         self._server = server
-        if storage is None:
-            self._storage = Storage()
-        else:
-            self._storage = storage
+        self._storage = storage or Storage()
 
-    async def handle(self, message: Message, peername: PEERNAME) -> list[Any]:
+    async def handle(self, message: Message, connection: Connection) -> list[Any]:
+        if isinstance(message.parsed, str) and message.parsed.startswith("REDIS"):
+            self._server.handshake_finished = True
         if not isinstance(message.parsed, list):
             return []
         command_class: ICommand | None = {
@@ -50,40 +49,40 @@ class RedisCommandHandler:
 
         response = [
             item
-            async for item in command_class(self._server, self._storage, peername).execute(message)
+            async for item in command_class(self._server, self._storage, connection).execute(
+                message
+            )
         ]
-        if not self._server.is_master:
-            if (
-                issubclass(command_class, ReplconfCommand)
-                or issubclass(command_class, InfoCommand)
-                or issubclass(command_class, GetCommand)
-            ):
-                return response
-            return []
+        if self._server.handshake_finished:
+            self._server.inc_offset(message.size)
         return response
 
-    def need_store_connection(self, message: Message) -> bool:
-        if not isinstance(message.parsed, list) or len(message.parsed) == 0:
-            return False
-        command = message.parsed[0].lower()
-        return command == "psync"
-
-
 class ICommand(ABC):
-    def __init__(self, server: RedisServer, storage: Storage, peername: PEERNAME) -> None:
+    lowercase_message = False
+    respond_master = False
+    propagate = False
+
+    def __init__(self, server: RedisServer, storage: Storage, connection: Connection) -> None:
         self._server = server
         self._storage = storage
-        self._peername = peername
+        self._connection = connection
+
+    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
+        if self.lowercase_message:
+            message.parsed = [item.lower() for item in message.parsed]
+
+        async for item in self._execute(message):
+            if self._server.is_master or self.respond_master:
+                yield item
+
+        if self.propagate:
+            from app.server import MasterServer
+        if isinstance(self._server, MasterServer):
+                asyncio.create_task(self._server.propagate(message))
 
     @abstractmethod
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         raise NotImplementedError
-
-    def _propagate(self, message: Message) -> None:
-        from app.server import MasterServer
-        if isinstance(self._server, MasterServer):
-            asyncio.create_task(self._server.propagate(message))
-
 
 def bulk_string_wrap(xrange: list | None) -> list | None:
     if not xrange:
@@ -95,42 +94,29 @@ def bulk_string_wrap(xrange: list | None) -> list | None:
 
 
 class PingCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         yield SimpleString("PONG")
 
 
 class EchoCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         yield BulkString(message.parsed[1])
 
 
 class SetCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    propagate = True 
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         match message.parsed[1:]:
             case [key, value]:
-                await self._set_value(message, key, value)
+                self._storage[key] = StorageValue(value)
                 yield SimpleString("OK")
             case [key, value, "px", expired_time]:
-                await self._set_value(
-                    message,
-                    key,
-                    value,
-                    expired_time=datetime.datetime.now()
-                    + datetime.timedelta(milliseconds=int(expired_time)),
-                )
+                self._storage[key] = StorageValue(value, expired_time)
                 yield SimpleString("OK")
-            case _:
-                yield ErrorString("Wrong number of arguments for'set' command")
-
-    async def _set_value(
-        self, message: Message, key: str, value: str, expired_time: datetime.datetime | None = None
-    ) -> None:
-        self._propagate(message)
-        self._storage[key] = StorageValue(value, expired_time)
-
 
 class GetCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str | None, None]:
+    respond_master = True 
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | None, None]:
         match message.parsed[1:]:
             case [key]:
                 value = self._storage[key]
@@ -140,11 +126,10 @@ class GetCommand(ICommand):
 
 
 class XAddCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    propagate = True 
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         match message.parsed[1:]:
-            case [stream_key, entry_id, *entries]:
-                self._propagate(message)
-                
+            case [stream_key, entry_id, *entries]:                
                 
                 try:
                     yield BulkString(self._xadd(stream_key, entry_id, entries))
@@ -164,7 +149,7 @@ class XAddCommand(ICommand):
 
 
 class XRangeCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         match message.parsed[1:]:
             case [stream_key, start, end]:
                 stream: Stream = self._storage[stream_key]
@@ -174,7 +159,7 @@ class XRangeCommand(ICommand):
 
 
 class XReadCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         match message.parsed[1:]:
             case ["streams", *streams]:
                 yield bulk_string_wrap(await self._xread(streams))
@@ -215,7 +200,7 @@ class XReadCommand(ICommand):
 
 
 class TypeCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         value = self._storage[message.parsed[1]]
         if isinstance(value, str):
             yield SimpleString("string")
@@ -225,8 +210,10 @@ class TypeCommand(ICommand):
 
 
 class InfoCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
-        match [m.lower() for m in message.parsed[1:]]:
+    lowercase_message = True 
+    respond_master = True 
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
+        match message.parsed[1:]:
             case ["replication"]:
                 role = "master" if self._server.is_master else "slave"
                 yield BulkString(
@@ -237,8 +224,10 @@ class InfoCommand(ICommand):
 
 
 class ReplconfCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
-        match [m.lower() for m in message.parsed[1:]]:
+    lowercase_message = True
+    respond_master = True
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
+        match message.parsed[1:]:
             case ["getack", "*"]:
                 yield [
                     BulkString("REPLCONF"),
@@ -247,10 +236,8 @@ class ReplconfCommand(ICommand):
                 ]
             case ["ack", offset]:
                 from app.server import MasterServer
-
                 if isinstance(self._server, MasterServer):
-                    self._server.store_offset(self._peername, int(offset))
-                    # yield SimpleString("OK")
+                    self._server.store_offset(self._connection, int(offset))
             case ["listening-port", _]:
                 yield SimpleString("OK")
             case ["capa", "psync2"]:
@@ -260,9 +247,12 @@ class ReplconfCommand(ICommand):
 
 
 class PsyncCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         match message.parsed[1:]:
             case ["?", "-1"]:
+                from app.server import MasterServer
+                if isinstance(self._server, MasterServer):
+                    self._server.store_connection(self._connection)
                 yield SimpleString(f"FULLRESYNC {self._server.master_id} {self._server.offset}")
                 yield RDBString(default_rdb)
             case _:
@@ -270,7 +260,7 @@ class PsyncCommand(ICommand):
 
 
 class WaitCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
         from app.server import MasterServer
 
         if not isinstance(self._server, MasterServer):
@@ -303,8 +293,9 @@ class WaitCommand(ICommand):
                 yield ErrorString("Wronf arguments for 'wait' command")
 
 class ConfigCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
-        match [m.lower() for m in message.parsed[1:]]:
+    lowercase_message = True
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
+        match message.parsed[1:]:
             case ["get", key]:
                 if key not in {"dir", "dbfilename"}:
                     yield ErrorString(f"Unknown config key {key}")
@@ -314,8 +305,9 @@ class ConfigCommand(ICommand):
 
 
 class KeysCommand(ICommand):
-    async def execute(self, message: Message) -> AsyncGenerator[list[str] | str, None]:
-        subcommand = message.parsed[1].lower()
+    lowercase_message = True 
+    async def _execute(self, message: Message) -> AsyncGenerator[list[str] | str | bytes, None]:
+        subcommand = message.parsed[1]
         if subcommand == "*":
             yield [BulkString(key) for key in self._storage]
         yield ErrorString("Unknown keys subcommand {subcommand}")

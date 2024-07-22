@@ -2,9 +2,6 @@ import asyncio
 import argparse
 from app.server import MasterServer, SlaveServer
 
-
-
-
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--port", type=int, default=6379)
@@ -13,7 +10,7 @@ async def main():
     parser.add_argument("--dbfilename", type=str, default=None)
     args = parser.parse_args()
     config = {}
-    if args.dir:
+    if args.dir and args.dbfilename:
         config["dir"] = args.dir
     if args.dbfilename:
         config["dbfilename"] = args.dbfilename
