@@ -1,7 +1,11 @@
 from dataclasses import dataclass 
+from __future__ import annotations 
 import asyncio 
 import datetime 
-from typing import Any 
+from typing import TYPE_CHECKING, Any 
+
+if TYPE_CHECKING:
+    from app.storage import Stream 
 
 PEERNAME = tuple[str, int, int, int]
 
@@ -13,8 +17,14 @@ class Connection:
     offset: int = 0
 
     @staticmethod
-    def create(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> "Connection":
-        return Connection(writer.get_extra_info("peername"), reader, writer)
+    def from_string(start: str, stream: Stream | None) -> "EntryId":
+        if start == "$":
+            if stream is None:
+                return EntryId(-1, -1)
+            else:
+                return stream.max_key()
+
+        timestamp, sequence_number = start.split("-")
 
 @dataclass
 class WaitTrigger:
@@ -44,7 +54,7 @@ class EntryId:
 class StreamTrigger:
     event: asyncio.Event
     key: str
-    entry_id: EntryId
+    entry_id: EntryId | None = None 
 
 
 @dataclass
